@@ -3,28 +3,60 @@
 
 #include <sqlite3.h>
 
+static sqlite3 *db = NULL;
+
 /**/
 static int
-bin_sqlite_history(char *nam, char **args, Options ops, UNUSED(int func))
+bin_sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
 {
-    unsigned char c;
-    long i = 0;
+    const bool verbose = OPT_ISSET(ops, 'v');
 
-    printf("Options: ");
-    for (c = 32; ++c < 128;)
-	if (OPT_ISSET(ops,c))
-	    putchar(c);
-    printf("\nArguments:");
-    for (; *args; i++, args++) {
-	putchar(' ');
-	fputs(*args, stdout);
+    if (db) {
+        fprintf(stderr, "database already opened\n");
+        return 1;
+    }
+
+    int ret = sqlite3_open(args[0], &db);
+    if (ret != SQLITE_OK) {
+        fprintf(stderr, "could not open db: %s\n", sqlite3_errstr(ret));
+        return 1;
+    }
+
+    if (verbose) {
+        printf("sqlite_history: opened db at %s\n", args[0]);
     }
 
     return 0;
 }
 
+/**/
+static int
+bin_sqlite_history_close(char *nam, char **args, Options ops, UNUSED(int func))
+{
+    const bool verbose = OPT_ISSET(ops, 'v');
+
+    if (!db) {
+        fprintf(stderr, "database is not opened\n");
+        return 1;
+    }
+
+    int ret = sqlite3_close(db);
+    if (ret != SQLITE_OK) {
+        fprintf(stderr, "could not close db: %s\n", sqlite3_errstr(ret));
+        return 1;
+    }
+
+    if (verbose) {
+        printf("sqlite_history: closed db\n");
+    }
+    db = NULL;
+
+    return 0;
+}
+
 static struct builtin bintab[] = {
-    BUILTIN("sqlite_history", 0, bin_sqlite_history, 0, -1, 0, "flags", NULL),
+    BUILTIN("sqlite_history_open", 0, bin_sqlite_history_open, 1, 1, 0, "v", NULL),
+    BUILTIN("sqlite_history_close", 0, bin_sqlite_history_close, 0, 0, 0, "v", NULL),
 };
 
 static struct features module_features = {
@@ -77,6 +109,12 @@ cleanup_(Module m)
 int
 finish_(UNUSED(Module m))
 {
+    int ret = sqlite3_close(db);
+    if (ret != SQLITE_OK) {
+        fprintf(stderr, "sqlite_history: close db: %s\n", sqlite3_errstr(ret));
+    }
+    db = NULL;
+
     return 0;
 }
 
