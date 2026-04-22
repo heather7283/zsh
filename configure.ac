@@ -436,6 +436,17 @@ dnl Do you want to look for capability support?
 AC_ARG_ENABLE(cap,
 AS_HELP_STRING([--enable-cap],[enable the search for POSIX capabilities (may require additional headers to be added by hand)]))
 
+dnl Do you want to look for sqlite support?
+AC_ARG_ENABLE(sqlite,
+AS_HELP_STRING([--enable-sqlite],[enable the search for the sqlite3 library]))
+
+if test "x$enable_sqlite" = xyes; then
+  AC_CHECK_PROG([PKG_CONFIG], pkg-config, pkg-config)
+  if test "x$PKG_CONFIG" = x; then
+    AC_MSG_ERROR(enable_sqlite was specified but pkg-config program wasn't found in PATH)
+  fi
+fi
+
 # Default off for licensing reasons
 AC_ARG_ENABLE(gdbm,
 AS_HELP_STRING([--enable-gdbm],[enable the search for the GDBM library (see the zsh/db/gdbm module)]))
@@ -1362,6 +1373,12 @@ fi
 
 if test x$enable_cap = xyes; then
   AC_CHECK_FUNCS(cap_get_proc)
+fi
+
+if test "x$enable_sqlite" = xyes; then
+  CFLAGS="`$PKG_CONFIG --cflags sqlite3` $CFLAGS"
+  LIBS="`$PKG_CONFIG --libs sqlite3` $LIBS"
+  AC_CHECK_FUNCS(sqlite3_open)
 fi
 
 dnl  Check if tgetent accepts NULL (and will allocate its own termcap buffer)
