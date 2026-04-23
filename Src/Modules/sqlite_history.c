@@ -3,16 +3,25 @@
 
 #include <sqlite3.h>
 
+#define INFO(msg, ...) \
+    do { \
+        if (g.verbose) printf("sqlite_history: " msg "\n", ##__VA_ARGS__); \
+    } while (0)
+#define ERROR(msg, ...) \
+    fprintf(stderr, "sqlite_history: " msg "\n", ##__VA_ARGS__)
+
 #define DB_VERSION 1
 
 static struct {
     sqlite3 *db;
     sqlite3_stmt *insert;
     long session_id;
+    bool verbose;
 } g = {
     .db = NULL,
     .insert = NULL,
     .session_id = LONG_MIN,
+    .verbose = false,
 };
 
 /**/
@@ -21,8 +30,8 @@ exec(const char *sql)
 {
     int ret = sqlite3_exec(g.db, sql, NULL, NULL, NULL);
     if (ret != SQLITE_OK) {
-        fprintf(stderr, "failed to execute sql: %s\n", sqlite3_errmsg(g.db));
-        fprintf(stderr, "source: %s\n", sql);
+        ERROR("failed to execute sql: %s", sqlite3_errmsg(g.db));
+        ERROR("source: %s", sql);
         return false;
     }
 
@@ -36,8 +45,8 @@ prepare(const char *sql)
     struct sqlite3_stmt* stmt = NULL;
     int ret = sqlite3_prepare_v2(g.db, sql, -1, &stmt, NULL);
     if (ret != SQLITE_OK) {
-        fprintf(stderr, "failed to prepare stmt: %s\n", sqlite3_errmsg(g.db));
-        fprintf(stderr, "source: %s\n", sql);
+        ERROR("failed to prepare stmt: %s", sqlite3_errmsg(g.db));
+        ERROR("source: %s", sql);
         return NULL;
     }
 
@@ -60,7 +69,7 @@ get_user_version(int *version)
     sqlite3_finalize(stmt);
 
     if (ret != SQLITE_ROW) {
-        fprintf(stderr, "could not get user_version: %s\n",
+        ERROR("could not get user_version: %s",
                 sqlite3_errstr(ret));
         return false;
     } else {
@@ -100,7 +109,7 @@ save_histent(const struct histent *he)
                        he->ftim);
 
     if (sqlite3_step(g.insert) != SQLITE_DONE) {
-        fprintf(stderr, "could not insert entry: %s\n", sqlite3_errmsg(g.db));
+        ERROR("could not insert entry: %s", sqlite3_errmsg(g.db));
         ret = false;
     }
 
@@ -128,7 +137,7 @@ start_session(long *id)
     }
 
     if (sqlite3_step(stmt) != SQLITE_ROW) {
-        fprintf(stderr, "could not get shell session id: %s\n",
+        ERROR("could not get shell session id: %s",
                 sqlite3_errmsg(g.db));
         ret = false;
         goto out;
@@ -143,7 +152,7 @@ out:
 
 /**/
 static bool
-migrate(bool verbose)
+migrate(void)
 {
     int version;
     if (!get_user_version(&version)) {
@@ -169,11 +178,7 @@ migrate(bool verbose)
     };
 
     while (version != DB_VERSION) {
-        if (verbose) {
-            printf("sqlite_history: migration %d -> %d\n",
-                   version, version + 1);
-        }
-
+        INFO("sqlite_history: migration %d -> %d", version, version + 1);
         if (!exec(migrations[version]) || !set_user_version(++version)) {
             return false;
         }
@@ -184,27 +189,24 @@ migrate(bool verbose)
 
 /**/
 static int
-bin_sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
+sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
 {
-    const bool verbose = OPT_ISSET(ops, 'v');
-
     if (g.db) {
-        fprintf(stderr, "database already opened\n");
+        ERROR("database already opened");
         return 1;
     }
 
+    g.verbose = OPT_ISSET(ops, 'v');
+
     int ret = sqlite3_open(args[0], &g.db);
     if (ret != SQLITE_OK) {
-        fprintf(stderr, "could not open g.db: %s\n", sqlite3_errstr(ret));
+        ERROR("could not open g.db: %s", sqlite3_errstr(ret));
         goto err;
     }
+    INFO("sqlite_history: opened g.db at %s", args[0]);
 
-    if (verbose) {
-        printf("sqlite_history: opened g.db at %s\n", args[0]);
-    }
-
-    if (!migrate(verbose)) {
-        fprintf(stderr, "migration failed\n");
+    if (!migrate()) {
+        ERROR("migration failed");
         goto err;
     }
 
@@ -232,51 +234,47 @@ err:
     g.db = NULL;
 
     g.session_id = LONG_MIN;
+    g.verbose = false;
 
     return 1;
 }
 
 /**/
 static int
-bin_sqlite_history_close(char *nam, char **args, Options ops, UNUSED(int func))
+sqlite_history_close(char *nam, char **args, Options ops, UNUSED(int func))
 {
-    const bool verbose = OPT_ISSET(ops, 'v');
-
     if (!g.db) {
-        fprintf(stderr, "database is not opened\n");
+        ERROR("database is not opened");
         return 1;
     }
+
+    sqlite3_finalize(g.insert);
+    g.insert = NULL;
 
     int ret = sqlite3_close(g.db);
     if (ret != SQLITE_OK) {
-        fprintf(stderr, "could not close g.db: %s\n", sqlite3_errstr(ret));
-        return 1;
-    }
-
-    if (verbose) {
-        printf("sqlite_history: closed g.db\n");
+        ERROR("close g.db: %s", sqlite3_errstr(ret));
     }
     g.db = NULL;
+
+    g.session_id = LONG_MIN;
+    g.verbose = false;
 
     return 0;
 }
 
 /**/
 static int
-bin_sqlite_history_save(char *nam, char **args, Options ops, UNUSED(int func))
+sqlite_history_save(char *nam, char **args, Options ops, UNUSED(int func))
 {
-    const bool verbose = OPT_ISSET(ops, 'v');
-
     struct histent *he = hist_ring->up;
     if (!he) {
-        fprintf(stderr, "no last history entry found\n");
+        ERROR("no last history entry found");
         return 1;
     }
 
-    if (verbose) {
-        printf("sqlite_history: last item: stim=%lu ftim=%lu text=%s\n",
-               he->stim, he->ftim, he->node.nam);
-    }
+    INFO("sqlite_history: last item: stim=%lu ftim=%lu text=%s",
+         he->stim, he->ftim, he->node.nam);
 
     if (!save_histent(he)) {
         return 1;
@@ -286,9 +284,9 @@ bin_sqlite_history_save(char *nam, char **args, Options ops, UNUSED(int func))
 }
 
 static struct builtin bintab[] = {
-    BUILTIN("sqlite_history_open", 0, bin_sqlite_history_open, 1, 1, 0, "v", NULL),
-    BUILTIN("sqlite_history_close", 0, bin_sqlite_history_close, 0, 0, 0, "v", NULL),
-    BUILTIN("sqlite_history_save", 0, bin_sqlite_history_save, 0, 0, 0, "v", NULL),
+    BUILTIN("sqlite_history_open", 0, sqlite_history_open, 1, 1, 0, "v", NULL),
+    BUILTIN("sqlite_history_close", 0, sqlite_history_close, 0, 0, 0, "", NULL),
+    BUILTIN("sqlite_history_save", 0, sqlite_history_save, 0, 0, 0, "", NULL),
 };
 
 static struct features module_features = {
@@ -344,9 +342,12 @@ finish_(UNUSED(Module m))
 
     int ret = sqlite3_close(g.db);
     if (ret != SQLITE_OK) {
-        fprintf(stderr, "sqlite_history: close g.db: %s\n", sqlite3_errstr(ret));
+        ERROR("close g.db: %s", sqlite3_errstr(ret));
     }
     g.db = NULL;
+
+    g.session_id = LONG_MIN;
+    g.verbose = false;
 
     return 0;
 }
