@@ -275,6 +275,9 @@ sqlite_history_save(char *nam, char **args, Options ops, UNUSED(int func))
     if (!he) {
         ERROR("no last history entry found");
         return 1;
+    } else if (he->node.nam[0] == '\0') {
+        /* do not process empty entries */
+        return 0;
     }
 
     INFO("sqlite_history: last item: stim=%lu ftim=%lu text=%s",
