@@ -7,6 +7,12 @@
 
 static sqlite3 *db = NULL;
 
+static sqlite3_stmt *insert_stmt = NULL;
+static const char insert_stmt_source[] =
+    "INSERT INTO history ( command, start_time, finish_time ) "
+    "VALUES ( @command, @start_time, @finish_time );"
+;
+
 /**/
 static bool
 exec(const char *sql)
@@ -106,6 +112,33 @@ migrate(bool verbose)
 }
 
 /**/
+static bool
+save_histent(const struct histent *he)
+{
+    bool ret = true;
+
+    sqlite3_bind_text(insert_stmt,
+                      sqlite3_bind_parameter_index(insert_stmt, "@command"),
+                      he->node.nam, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(insert_stmt,
+                       sqlite3_bind_parameter_index(insert_stmt, "@start_time"),
+                       he->stim);
+    sqlite3_bind_int64(insert_stmt,
+                       sqlite3_bind_parameter_index(insert_stmt, "@finish_time"),
+                       he->ftim);
+
+    if (sqlite3_step(insert_stmt) != SQLITE_DONE) {
+        fprintf(stderr, "could not insert entry: %s\n", sqlite3_errmsg(db));
+        ret = false;
+    }
+
+    sqlite3_clear_bindings(insert_stmt);
+    sqlite3_reset(insert_stmt);
+
+    return ret;
+}
+
+/**/
 static int
 bin_sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
 {
@@ -122,6 +155,11 @@ bin_sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
         goto err;
     }
 
+    insert_stmt = prepare(insert_stmt_source);
+    if (!insert_stmt) {
+        goto err;
+    }
+
     if (verbose) {
         printf("sqlite_history: opened db at %s\n", args[0]);
     }
@@ -134,8 +172,12 @@ bin_sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
     return 0;
 
 err:
+    sqlite3_finalize(insert_stmt);
+    insert_stmt = NULL;
+
     sqlite3_close(db);
     db = NULL;
+
     return 1;
 }
 
@@ -164,9 +206,34 @@ bin_sqlite_history_close(char *nam, char **args, Options ops, UNUSED(int func))
     return 0;
 }
 
+/**/
+static int
+bin_sqlite_history_save(char *nam, char **args, Options ops, UNUSED(int func))
+{
+    const bool verbose = OPT_ISSET(ops, 'v');
+
+    struct histent *he = hist_ring->up;
+    if (!he) {
+        fprintf(stderr, "no last history entry found\n");
+        return 1;
+    }
+
+    if (verbose) {
+        printf("sqlite_history: last item: stim=%lu ftim=%lu text=%s\n",
+               he->stim, he->ftim, he->node.nam);
+    }
+
+    if (!save_histent(he)) {
+        return 1;
+    }
+
+    return 0;
+}
+
 static struct builtin bintab[] = {
     BUILTIN("sqlite_history_open", 0, bin_sqlite_history_open, 1, 1, 0, "v", NULL),
     BUILTIN("sqlite_history_close", 0, bin_sqlite_history_close, 0, 0, 0, "v", NULL),
+    BUILTIN("sqlite_history_save", 0, bin_sqlite_history_save, 0, 0, 0, "v", NULL),
 };
 
 static struct features module_features = {
@@ -181,8 +248,6 @@ static struct features module_features = {
 int
 setup_(UNUSED(Module m))
 {
-    printf("sqlite_history: running with sqlite ver %s\n", sqlite3_libversion());
-    fflush(stdout);
     return 0;
 }
 
@@ -219,6 +284,9 @@ cleanup_(Module m)
 int
 finish_(UNUSED(Module m))
 {
+    sqlite3_finalize(insert_stmt);
+    insert_stmt = NULL;
+
     int ret = sqlite3_close(db);
     if (ret != SQLITE_OK) {
         fprintf(stderr, "sqlite_history: close db: %s\n", sqlite3_errstr(ret));
