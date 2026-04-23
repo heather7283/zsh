@@ -204,7 +204,7 @@ sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
     }
     INFO("opened db at %s", args[0]);
 
-    if (!exec("PRAGMA foreign_keys = 1;")) {
+    if (!exec("PRAGMA foreign_keys = 1;") || !exec("PRAGMA journal_mode = WAL;")) {
         goto err;
     }
 
