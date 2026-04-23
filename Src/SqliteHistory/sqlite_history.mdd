@@ -1,8 +1,8 @@
 name=x_heather7283/sqlite_history
-link=`if test x$enable_sqlite = xyes; then echo dynamic; else echo no; fi`
+link=`if test "x$enable_sqlite" = "xyes"; then echo dynamic; else echo static; fi`
 load=no
 
-autofeatures="b:sqlite_history"
+autofeatures="b:sqlite_history_open b:sqlite_history_close b:sqlite_history_save b:sqlite_history_list"
 
 objects="sqlite_history.o"
 
