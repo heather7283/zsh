@@ -5,22 +5,23 @@
 
 #define DB_VERSION 1
 
-static sqlite3 *db = NULL;
-static long session_id = LONG_MIN;
-
-static sqlite3_stmt *insert_stmt = NULL;
-static const char insert_stmt_source[] =
-    "INSERT INTO commands ( session_id, command, started_at, finished_at ) "
-    "VALUES ( @session_id, @command, @started_at, @finished_at );"
-;
+static struct {
+    sqlite3 *db;
+    sqlite3_stmt *insert;
+    long session_id;
+} g = {
+    .db = NULL,
+    .insert = NULL,
+    .session_id = LONG_MIN,
+};
 
 /**/
 static bool
 exec(const char *sql)
 {
-    int ret = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    int ret = sqlite3_exec(g.db, sql, NULL, NULL, NULL);
     if (ret != SQLITE_OK) {
-        fprintf(stderr, "failed to execute sql: %s\n", sqlite3_errmsg(db));
+        fprintf(stderr, "failed to execute sql: %s\n", sqlite3_errmsg(g.db));
         fprintf(stderr, "source: %s\n", sql);
         return false;
     }
@@ -33,9 +34,9 @@ static struct sqlite3_stmt *
 prepare(const char *sql)
 {
     struct sqlite3_stmt* stmt = NULL;
-    int ret = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    int ret = sqlite3_prepare_v2(g.db, sql, -1, &stmt, NULL);
     if (ret != SQLITE_OK) {
-        fprintf(stderr, "failed to prepare stmt: %s\n", sqlite3_errmsg(db));
+        fprintf(stderr, "failed to prepare stmt: %s\n", sqlite3_errmsg(g.db));
         fprintf(stderr, "source: %s\n", sql);
         return NULL;
     }
@@ -85,26 +86,26 @@ save_histent(const struct histent *he)
 {
     bool ret = true;
 
-    sqlite3_bind_int64(insert_stmt,
-                       sqlite3_bind_parameter_index(insert_stmt, "@session_id"),
-                       session_id);
-    sqlite3_bind_text(insert_stmt,
-                      sqlite3_bind_parameter_index(insert_stmt, "@command"),
+    sqlite3_bind_int64(g.insert,
+                       sqlite3_bind_parameter_index(g.insert, "@session_id"),
+                       g.session_id);
+    sqlite3_bind_text(g.insert,
+                      sqlite3_bind_parameter_index(g.insert, "@command"),
                       he->node.nam, -1, SQLITE_STATIC);
-    sqlite3_bind_int64(insert_stmt,
-                       sqlite3_bind_parameter_index(insert_stmt, "@started_at"),
+    sqlite3_bind_int64(g.insert,
+                       sqlite3_bind_parameter_index(g.insert, "@started_at"),
                        he->stim);
-    sqlite3_bind_int64(insert_stmt,
-                       sqlite3_bind_parameter_index(insert_stmt, "@finished_at"),
+    sqlite3_bind_int64(g.insert,
+                       sqlite3_bind_parameter_index(g.insert, "@finished_at"),
                        he->ftim);
 
-    if (sqlite3_step(insert_stmt) != SQLITE_DONE) {
-        fprintf(stderr, "could not insert entry: %s\n", sqlite3_errmsg(db));
+    if (sqlite3_step(g.insert) != SQLITE_DONE) {
+        fprintf(stderr, "could not insert entry: %s\n", sqlite3_errmsg(g.db));
         ret = false;
     }
 
-    sqlite3_clear_bindings(insert_stmt);
-    sqlite3_reset(insert_stmt);
+    sqlite3_clear_bindings(g.insert);
+    sqlite3_reset(g.insert);
 
     return ret;
 }
@@ -128,7 +129,7 @@ start_session(long *id)
 
     if (sqlite3_step(stmt) != SQLITE_ROW) {
         fprintf(stderr, "could not get shell session id: %s\n",
-                sqlite3_errmsg(db));
+                sqlite3_errmsg(g.db));
         ret = false;
         goto out;
     }
@@ -187,19 +188,19 @@ bin_sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
 {
     const bool verbose = OPT_ISSET(ops, 'v');
 
-    if (db) {
+    if (g.db) {
         fprintf(stderr, "database already opened\n");
         return 1;
     }
 
-    int ret = sqlite3_open(args[0], &db);
+    int ret = sqlite3_open(args[0], &g.db);
     if (ret != SQLITE_OK) {
-        fprintf(stderr, "could not open db: %s\n", sqlite3_errstr(ret));
+        fprintf(stderr, "could not open g.db: %s\n", sqlite3_errstr(ret));
         goto err;
     }
 
     if (verbose) {
-        printf("sqlite_history: opened db at %s\n", args[0]);
+        printf("sqlite_history: opened g.db at %s\n", args[0]);
     }
 
     if (!migrate(verbose)) {
@@ -207,25 +208,30 @@ bin_sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
         goto err;
     }
 
-    if (!start_session(&session_id)) {
+    if (!start_session(&g.session_id)) {
         goto err;
     }
 
-    insert_stmt = prepare(insert_stmt_source);
-    if (!insert_stmt) {
+
+    static const char insert_source[] =
+        "INSERT INTO commands ( session_id, command, started_at, finished_at )"
+        " VALUES ( @session_id, @command, @started_at, @finished_at );"
+    ;
+    g.insert = prepare(insert_source);
+    if (!g.insert) {
         goto err;
     }
 
     return 0;
 
 err:
-    sqlite3_finalize(insert_stmt);
-    insert_stmt = NULL;
+    sqlite3_finalize(g.insert);
+    g.insert = NULL;
 
-    sqlite3_close(db);
-    db = NULL;
+    sqlite3_close(g.db);
+    g.db = NULL;
 
-    session_id = LONG_MIN;
+    g.session_id = LONG_MIN;
 
     return 1;
 }
@@ -236,21 +242,21 @@ bin_sqlite_history_close(char *nam, char **args, Options ops, UNUSED(int func))
 {
     const bool verbose = OPT_ISSET(ops, 'v');
 
-    if (!db) {
+    if (!g.db) {
         fprintf(stderr, "database is not opened\n");
         return 1;
     }
 
-    int ret = sqlite3_close(db);
+    int ret = sqlite3_close(g.db);
     if (ret != SQLITE_OK) {
-        fprintf(stderr, "could not close db: %s\n", sqlite3_errstr(ret));
+        fprintf(stderr, "could not close g.db: %s\n", sqlite3_errstr(ret));
         return 1;
     }
 
     if (verbose) {
-        printf("sqlite_history: closed db\n");
+        printf("sqlite_history: closed g.db\n");
     }
-    db = NULL;
+    g.db = NULL;
 
     return 0;
 }
@@ -333,14 +339,14 @@ cleanup_(Module m)
 int
 finish_(UNUSED(Module m))
 {
-    sqlite3_finalize(insert_stmt);
-    insert_stmt = NULL;
+    sqlite3_finalize(g.insert);
+    g.insert = NULL;
 
-    int ret = sqlite3_close(db);
+    int ret = sqlite3_close(g.db);
     if (ret != SQLITE_OK) {
-        fprintf(stderr, "sqlite_history: close db: %s\n", sqlite3_errstr(ret));
+        fprintf(stderr, "sqlite_history: close g.db: %s\n", sqlite3_errstr(ret));
     }
-    db = NULL;
+    g.db = NULL;
 
     return 0;
 }
