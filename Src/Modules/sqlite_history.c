@@ -290,10 +290,55 @@ sqlite_history_save(char *nam, char **args, Options ops, UNUSED(int func))
     return 0;
 }
 
+/**/
+static int
+sqlite_history_list(char *nam, char **args, Options ops, UNUSED(int func))
+{
+    static const char sql[] =
+        "SELECT command FROM commands ORDER BY started_at ASC;"
+    ;
+
+    const char sep = OPT_ISSET(ops, 'z') ? '\0' : '\n';
+    int ret = 0;
+    struct sqlite3_stmt *stmt = NULL;
+
+    stmt = prepare(sql);
+    if (!stmt) {
+        ret = 1;
+        goto out;
+    }
+
+    while (true) {
+        const char *cmd;
+        size_t len;
+
+        switch (sqlite3_step(stmt)) {
+        case SQLITE_ROW:
+            cmd = (const char *) sqlite3_column_text(stmt, 0);
+            len = sqlite3_column_bytes(stmt, 0);
+            fwrite(cmd, 1, len, stdout);
+            fwrite(&sep, 1, 1, stdout);
+            continue;
+        case SQLITE_DONE:
+            goto out;
+        default:
+            ERROR("could not list history entries: %s", sqlite3_errmsg(g.db));
+            ret = 1;
+            goto out;
+        }
+    }
+
+out:
+    sqlite3_finalize(stmt);
+    fflush(stdout);
+    return ret;
+}
+
 static struct builtin bintab[] = {
     BUILTIN("sqlite_history_open", 0, sqlite_history_open, 1, 1, 0, "v", NULL),
     BUILTIN("sqlite_history_close", 0, sqlite_history_close, 0, 0, 0, "", NULL),
     BUILTIN("sqlite_history_save", 0, sqlite_history_save, 0, 0, 0, "", NULL),
+    BUILTIN("sqlite_history_list", 0, sqlite_history_list, 0, 0, 0, "z", NULL),
 };
 
 static struct features module_features = {
