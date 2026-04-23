@@ -153,6 +153,16 @@ Src/Zle/widgets.list
 Src/Zle/zle_things.h
 Src/Zle/zle_widget.h
 
+Src/SqliteHistory/Makefile.in
+Src/SqliteHistory/*.export
+Src/SqliteHistory/*.pro
+Src/SqliteHistory/*.epro
+Src/SqliteHistory/*.syms
+Src/SqliteHistory/*.mdh
+Src/SqliteHistory/*.mdhi
+Src/SqliteHistory/*.mdhs
+Src/SqliteHistory/*.mdh.tmp
+
 Test/*.tmp
 /.project
 .DS_Store
