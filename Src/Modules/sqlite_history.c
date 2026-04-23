@@ -205,6 +205,10 @@ sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
     }
     INFO("sqlite_history: opened g.db at %s", args[0]);
 
+    if (!exec("PRAGMA foreign_keys = 1;")) {
+        goto err;
+    }
+
     if (!migrate()) {
         ERROR("migration failed");
         goto err;
