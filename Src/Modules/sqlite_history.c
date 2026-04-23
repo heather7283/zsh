@@ -6,11 +6,12 @@
 #define DB_VERSION 1
 
 static sqlite3 *db = NULL;
+static long session_id = LONG_MIN;
 
 static sqlite3_stmt *insert_stmt = NULL;
 static const char insert_stmt_source[] =
-    "INSERT INTO history ( command, start_time, finish_time ) "
-    "VALUES ( @command, @start_time, @finish_time );"
+    "INSERT INTO commands ( session_id, command, started_at, finished_at ) "
+    "VALUES ( @session_id, @command, @started_at, @finished_at );"
 ;
 
 /**/
@@ -80,6 +81,67 @@ set_user_version(int version)
 
 /**/
 static bool
+save_histent(const struct histent *he)
+{
+    bool ret = true;
+
+    sqlite3_bind_int64(insert_stmt,
+                       sqlite3_bind_parameter_index(insert_stmt, "@session_id"),
+                       session_id);
+    sqlite3_bind_text(insert_stmt,
+                      sqlite3_bind_parameter_index(insert_stmt, "@command"),
+                      he->node.nam, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(insert_stmt,
+                       sqlite3_bind_parameter_index(insert_stmt, "@started_at"),
+                       he->stim);
+    sqlite3_bind_int64(insert_stmt,
+                       sqlite3_bind_parameter_index(insert_stmt, "@finished_at"),
+                       he->ftim);
+
+    if (sqlite3_step(insert_stmt) != SQLITE_DONE) {
+        fprintf(stderr, "could not insert entry: %s\n", sqlite3_errmsg(db));
+        ret = false;
+    }
+
+    sqlite3_clear_bindings(insert_stmt);
+    sqlite3_reset(insert_stmt);
+
+    return ret;
+}
+
+/**/
+static bool
+start_session(long *id)
+{
+    static const char sql[] =
+        "INSERT INTO sessions ( created_at ) VALUES ( unixepoch() ) RETURNING id;"
+    ;
+
+    bool ret = true;
+    struct sqlite3_stmt *stmt = NULL;
+
+    stmt = prepare(sql);
+    if (!stmt) {
+        ret = false;
+        goto out;
+    }
+
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        fprintf(stderr, "could not get shell session id: %s\n",
+                sqlite3_errmsg(db));
+        ret = false;
+        goto out;
+    }
+
+    *id = sqlite3_column_int64(stmt, 0);
+
+out:
+    sqlite3_finalize(stmt);
+    return ret;
+}
+
+/**/
+static bool
 migrate(bool verbose)
 {
     int version;
@@ -89,12 +151,20 @@ migrate(bool verbose)
 
     static const char *migrations[DB_VERSION] = {
         /* db version 1 - initial schema */
-        "CREATE TABLE history (\n"
+        "CREATE TABLE sessions (\n"
+        "    id         INTEGER PRIMARY KEY,\n"
+        "    created_at INTEGER NOT NULL\n"
+        ");\n"
+        "CREATE TABLE commands (\n"
         "    id          INTEGER PRIMARY KEY,\n"
+        "    session_id  INTEGER NOT NULL,\n"
+        "\n"
         "    command     TEXT    NOT NULL,\n"
-        "    start_time  INTEGER NOT NULL,\n"
-        "    finish_time INTEGER NOT NULL\n"
-        ");",
+        "    started_at  INTEGER NOT NULL,\n"
+        "    finished_at INTEGER NOT NULL,\n"
+        "\n"
+        "    FOREIGN KEY ( session_id ) REFERENCES sessions ( id ) ON DELETE CASCADE\n"
+        ");\n"
     };
 
     while (version != DB_VERSION) {
@@ -109,33 +179,6 @@ migrate(bool verbose)
     }
 
     return true;
-}
-
-/**/
-static bool
-save_histent(const struct histent *he)
-{
-    bool ret = true;
-
-    sqlite3_bind_text(insert_stmt,
-                      sqlite3_bind_parameter_index(insert_stmt, "@command"),
-                      he->node.nam, -1, SQLITE_STATIC);
-    sqlite3_bind_int64(insert_stmt,
-                       sqlite3_bind_parameter_index(insert_stmt, "@start_time"),
-                       he->stim);
-    sqlite3_bind_int64(insert_stmt,
-                       sqlite3_bind_parameter_index(insert_stmt, "@finish_time"),
-                       he->ftim);
-
-    if (sqlite3_step(insert_stmt) != SQLITE_DONE) {
-        fprintf(stderr, "could not insert entry: %s\n", sqlite3_errmsg(db));
-        ret = false;
-    }
-
-    sqlite3_clear_bindings(insert_stmt);
-    sqlite3_reset(insert_stmt);
-
-    return ret;
 }
 
 /**/
@@ -155,17 +198,21 @@ bin_sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
         goto err;
     }
 
-    insert_stmt = prepare(insert_stmt_source);
-    if (!insert_stmt) {
-        goto err;
-    }
-
     if (verbose) {
         printf("sqlite_history: opened db at %s\n", args[0]);
     }
 
     if (!migrate(verbose)) {
         fprintf(stderr, "migration failed\n");
+        goto err;
+    }
+
+    if (!start_session(&session_id)) {
+        goto err;
+    }
+
+    insert_stmt = prepare(insert_stmt_source);
+    if (!insert_stmt) {
         goto err;
     }
 
@@ -177,6 +224,8 @@ err:
 
     sqlite3_close(db);
     db = NULL;
+
+    session_id = LONG_MIN;
 
     return 1;
 }
