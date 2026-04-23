@@ -100,7 +100,7 @@ save_histent(const struct histent *he)
                        g.session_id);
     sqlite3_bind_text(g.insert,
                       sqlite3_bind_parameter_index(g.insert, "@command"),
-                      he->node.nam, -1, SQLITE_STATIC);
+                      unmeta(he->node.nam), -1, SQLITE_STATIC);
     sqlite3_bind_int64(g.insert,
                        sqlite3_bind_parameter_index(g.insert, "@started_at"),
                        he->stim);
