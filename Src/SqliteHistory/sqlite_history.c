@@ -137,8 +137,7 @@ start_session(long *id)
     }
 
     if (sqlite3_step(stmt) != SQLITE_ROW) {
-        ERROR("could not get shell session id: %s",
-                sqlite3_errmsg(g.db));
+        ERROR("could not get shell session id: %s", sqlite3_errmsg(g.db));
         ret = false;
         goto out;
     }
@@ -200,10 +199,10 @@ sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
 
     int ret = sqlite3_open(args[0], &g.db);
     if (ret != SQLITE_OK) {
-        ERROR("could not open g.db: %s", sqlite3_errstr(ret));
+        ERROR("could not open db: %s", sqlite3_errstr(ret));
         goto err;
     }
-    INFO("sqlite_history: opened g.db at %s", args[0]);
+    INFO("opened db at %s", args[0]);
 
     if (!exec("PRAGMA foreign_keys = 1;")) {
         goto err;
@@ -257,7 +256,7 @@ sqlite_history_close(char *nam, char **args, Options ops, UNUSED(int func))
 
     int ret = sqlite3_close(g.db);
     if (ret != SQLITE_OK) {
-        ERROR("close g.db: %s", sqlite3_errstr(ret));
+        ERROR("close db: %s", sqlite3_errstr(ret));
     }
     g.db = NULL;
 
@@ -394,7 +393,7 @@ finish_(UNUSED(Module m))
 
     int ret = sqlite3_close(g.db);
     if (ret != SQLITE_OK) {
-        ERROR("close g.db: %s", sqlite3_errstr(ret));
+        ERROR("close db: %s", sqlite3_errstr(ret));
     }
     g.db = NULL;
 
