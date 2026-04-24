@@ -10,7 +10,7 @@
 #define ERROR(msg, ...) \
     fprintf(stderr, "sqlite_history: " msg "\n", ##__VA_ARGS__)
 
-#define DB_VERSION 1
+#define DB_VERSION 2
 
 static struct {
     sqlite3 *db;
@@ -173,7 +173,9 @@ migrate(void)
         "    finished_at INTEGER NOT NULL CHECK ( finished_at >= started_at ),\n"
         "\n"
         "    FOREIGN KEY ( session_id ) REFERENCES sessions ( id ) ON DELETE CASCADE\n"
-        ");\n"
+        ");\n",
+        /* db version 2 - add index on started_at for faster listing */
+        "CREATE INDEX idx_commands_started_at ON commands ( started_at );\n",
     };
 
     if (version > DB_VERSION) {
