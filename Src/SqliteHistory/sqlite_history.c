@@ -176,7 +176,11 @@ migrate(void)
         ");\n"
     };
 
-    while (version != DB_VERSION) {
+    if (version > DB_VERSION) {
+        ERROR("db has version %d while this zsh build only supports up to %d",
+              version, DB_VERSION);
+        return false;
+    } else while (version < DB_VERSION) {
         INFO("sqlite_history: migration %d -> %d", version, version + 1);
         if (!exec(migrations[version]) || !set_user_version(++version)) {
             return false;
