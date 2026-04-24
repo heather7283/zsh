@@ -293,15 +293,16 @@ sqlite_history_save(char *nam, char **args, Options ops, UNUSED(int func))
 static int
 sqlite_history_list(char *nam, char **args, Options ops, UNUSED(int func))
 {
-    static const char sql[] =
-        "SELECT command FROM commands ORDER BY started_at ASC;"
-    ;
-
     const char sep = OPT_ISSET(ops, 'z') ? '\0' : '\n';
+    const char *const order = OPT_ISSET(ops, 'r') ? "DESC" : "ASC";
     int ret = 0;
     struct sqlite3_stmt *stmt = NULL;
 
-    stmt = prepare(sql);
+    char buf[55];
+    snprintf(buf, sizeof(buf),
+             "SELECT command FROM commands ORDER BY started_at %s;", order);
+
+    stmt = prepare(buf);
     if (!stmt) {
         ret = 1;
         goto out;
@@ -337,7 +338,7 @@ static struct builtin bintab[] = {
     BUILTIN("sqlite_history_open", 0, sqlite_history_open, 1, 1, 0, "v", NULL),
     BUILTIN("sqlite_history_close", 0, sqlite_history_close, 0, 0, 0, "", NULL),
     BUILTIN("sqlite_history_save", 0, sqlite_history_save, 0, 0, 0, "", NULL),
-    BUILTIN("sqlite_history_list", 0, sqlite_history_list, 0, 0, 0, "z", NULL),
+    BUILTIN("sqlite_history_list", 0, sqlite_history_list, 0, 0, 0, "zr", NULL),
 };
 
 static struct features module_features = {
