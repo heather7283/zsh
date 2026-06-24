@@ -5,10 +5,10 @@
 
 #define INFO(msg, ...) \
     do { \
-        if (g.verbose) printf("sqlite_history: " msg "\n", ##__VA_ARGS__); \
+        if (g.verbose) printf("sqlite-history: " msg "\n", ##__VA_ARGS__); \
     } while (0)
 #define ERROR(msg, ...) \
-    fprintf(stderr, "sqlite_history: " msg "\n", ##__VA_ARGS__)
+    fprintf(stderr, "sqlite-history: " msg "\n", ##__VA_ARGS__)
 
 #define DB_VERSION 2
 
@@ -183,7 +183,7 @@ migrate(void)
               version, DB_VERSION);
         return false;
     } else while (version < DB_VERSION) {
-        INFO("sqlite_history: migration %d -> %d", version, version + 1);
+        INFO("sqlite-history: migration %d -> %d", version, version + 1);
         if (!exec(migrations[version]) || !set_user_version(++version)) {
             return false;
         }
@@ -285,7 +285,7 @@ sqlite_history_save(char *nam, char **args, Options ops, UNUSED(int func))
         return 0;
     }
 
-    INFO("sqlite_history: last item: stim=%lu ftim=%lu text=%s",
+    INFO("sqlite-history: last item: stim=%lu ftim=%lu text=%s",
          he->stim, he->ftim, he->node.nam);
 
     if (!save_histent(he)) {
@@ -341,10 +341,10 @@ out:
 }
 
 static struct builtin bintab[] = {
-    BUILTIN("sqlite_history_open", 0, sqlite_history_open, 1, 1, 0, "v", NULL),
-    BUILTIN("sqlite_history_close", 0, sqlite_history_close, 0, 0, 0, "", NULL),
-    BUILTIN("sqlite_history_save", 0, sqlite_history_save, 0, 0, 0, "", NULL),
-    BUILTIN("sqlite_history_list", 0, sqlite_history_list, 0, 0, 0, "zr", NULL),
+    BUILTIN("sqlite-history-open", 0, sqlite_history_open, 1, 1, 0, "v", NULL),
+    BUILTIN("sqlite-history-close", 0, sqlite_history_close, 0, 0, 0, "", NULL),
+    BUILTIN("sqlite-history-save", 0, sqlite_history_save, 0, 0, 0, "", NULL),
+    BUILTIN("sqlite-history-list", 0, sqlite_history_list, 0, 0, 0, "zr", NULL),
 };
 
 static struct features module_features = {
