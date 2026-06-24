@@ -10,7 +10,7 @@
 #define ERROR(msg, ...) \
     fprintf(stderr, "sqlite-history: " msg "\n", ##__VA_ARGS__)
 
-#define DB_VERSION 2
+#define DB_VERSION 3
 
 static struct {
     sqlite3 *db;
@@ -124,7 +124,7 @@ static bool
 start_session(long *id)
 {
     static const char sql[] =
-        "INSERT INTO sessions ( created_at ) VALUES ( unixepoch() ) RETURNING id;"
+        "INSERT INTO sessions ( started_at ) VALUES ( unixepoch() ) RETURNING id;"
     ;
 
     bool ret = true;
@@ -176,6 +176,8 @@ migrate(void)
         ");\n",
         /* db version 2 - add index on started_at for faster listing */
         "CREATE INDEX idx_commands_started_at ON commands ( started_at );\n",
+	/* db version 3 - rename created_at to started_at */
+	"ALTER TABLE sessions RENAME COLUMN created_at TO started_at;\n",
     };
 
     if (version > DB_VERSION) {
