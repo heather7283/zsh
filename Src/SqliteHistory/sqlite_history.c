@@ -1,16 +1,67 @@
 #include "sqlite_history.mdh"
 #include "sqlite_history.pro"
 
-#include <sqlite3.h>
+#include <dlfcn.h>
 
 #define INFO(msg, ...) \
     do { \
         if (g.verbose) printf("sqlite-history: " msg "\n", ##__VA_ARGS__); \
     } while (0)
+
 #define ERROR(msg, ...) \
     fprintf(stderr, "sqlite-history: " msg "\n", ##__VA_ARGS__)
 
+#define countof(arr) (sizeof(arr) / sizeof(arr[0]))
+
 #define DB_VERSION 3
+
+
+#define SQLITE_OK           0   /* Successful result */
+#define SQLITE_DONE        101  /* sqlite3_step() has finished executing */
+#define SQLITE_ROW         100  /* sqlite3_step() has another row ready */
+
+typedef void (*sqlite3_destructor_type)(void*);
+#define SQLITE_STATIC      ((sqlite3_destructor_type)0)
+
+typedef struct sqlite3 sqlite3;
+typedef struct sqlite3_stmt sqlite3_stmt;
+
+#define FOR_LIST_OF_FUNCTIONS(DO) \
+    DO(int, exec, sqlite3 *db, const char *sql, \
+	          int (*callback)(void *data, int ncols, char **values, char **names), void *data, \
+	          char **errmsg) \
+    DO(const char *, errmsg, sqlite3 *db) \
+    DO(const char *, errstr, int code) \
+    DO(int, prepare_v2, sqlite3 *db, const char *zSql, int nByte, \
+                        sqlite3_stmt **ppStmt, const char **pzTail) \
+    DO(int, step, sqlite3_stmt *pStmt) \
+    DO(int, column_int, sqlite3_stmt *pStmt, int iCol) \
+    DO(int64_t, column_int64, sqlite3_stmt *pStmt, int iCol) \
+    DO(const unsigned char *, column_text, sqlite3_stmt *pStmt, int iCol) \
+    DO(int, column_bytes, sqlite3_stmt *pStmt, int iCol) \
+    DO(int, finalize, sqlite3_stmt *pStmt) \
+    DO(int, bind_parameter_index, sqlite3_stmt *pStmt, const char *zName) \
+    DO(int, bind_int64, sqlite3_stmt *pStmt, int iCol, int64_t val) \
+    DO(int, bind_text, sqlite3_stmt *pStmt, int iCol, \
+                       const char *str, int len, \
+                       void (*cleanup)(void *)) \
+    DO(int, clear_bindings, sqlite3_stmt *pStmt) \
+    DO(int, reset, sqlite3_stmt *pStmt) \
+    DO(int, open, const char *filename, sqlite3 **ppDb) \
+    DO(int, close, sqlite3 *pDb)
+
+#define DEFINE_FUNCTION_NAMES(ret, name, ...) "sqlite3_"#name,
+static const char *const sqlite_function_names[] = {
+    FOR_LIST_OF_FUNCTIONS(DEFINE_FUNCTION_NAMES)
+};
+
+#define DEFINE_FUNCTION_STRUCT_ELEMENT(ret, name, ...) ret (*name)(__VA_ARGS__);
+static struct {
+    FOR_LIST_OF_FUNCTIONS(DEFINE_FUNCTION_STRUCT_ELEMENT)
+} sqlite = {0};
+
+static void *sqlite_handle = NULL;
+
 
 static struct {
     sqlite3 *db;
@@ -24,13 +75,14 @@ static struct {
     .verbose = false,
 };
 
+
 /**/
 static bool
 exec(const char *sql)
 {
-    int ret = sqlite3_exec(g.db, sql, NULL, NULL, NULL);
+    int ret = sqlite.exec(g.db, sql, NULL, NULL, NULL);
     if (ret != SQLITE_OK) {
-        ERROR("failed to execute sql: %s", sqlite3_errmsg(g.db));
+        ERROR("failed to execute sql: %s", sqlite.errmsg(g.db));
         ERROR("source: %s", sql);
         return false;
     }
@@ -43,9 +95,9 @@ static struct sqlite3_stmt *
 prepare(const char *sql)
 {
     struct sqlite3_stmt* stmt = NULL;
-    int ret = sqlite3_prepare_v2(g.db, sql, -1, &stmt, NULL);
+    int ret = sqlite.prepare_v2(g.db, sql, -1, &stmt, NULL);
     if (ret != SQLITE_OK) {
-        ERROR("failed to prepare stmt: %s", sqlite3_errmsg(g.db));
+        ERROR("failed to prepare stmt: %s", sqlite.errmsg(g.db));
         ERROR("source: %s", sql);
         return NULL;
     }
@@ -64,13 +116,12 @@ get_user_version(int *version)
         return false;
     }
 
-    int ret = sqlite3_step(stmt);
-    res = sqlite3_column_int(stmt, 0);
-    sqlite3_finalize(stmt);
+    int ret = sqlite.step(stmt);
+    res = sqlite.column_int(stmt, 0);
+    sqlite.finalize(stmt);
 
     if (ret != SQLITE_ROW) {
-        ERROR("could not get user_version: %s",
-                sqlite3_errstr(ret));
+        ERROR("could not get user_version: %s", sqlite.errstr(ret));
         return false;
     } else {
         *version = res;
@@ -95,26 +146,26 @@ save_histent(const struct histent *he)
 {
     bool ret = true;
 
-    sqlite3_bind_int64(g.insert,
-                       sqlite3_bind_parameter_index(g.insert, "@session_id"),
-                       g.session_id);
-    sqlite3_bind_text(g.insert,
-                      sqlite3_bind_parameter_index(g.insert, "@command"),
-                      unmeta(he->node.nam), -1, SQLITE_STATIC);
-    sqlite3_bind_int64(g.insert,
-                       sqlite3_bind_parameter_index(g.insert, "@started_at"),
-                       he->stim);
-    sqlite3_bind_int64(g.insert,
-                       sqlite3_bind_parameter_index(g.insert, "@finished_at"),
-                       he->ftim);
+    sqlite.bind_int64(g.insert,
+                      sqlite.bind_parameter_index(g.insert, "@session_id"),
+                      g.session_id);
+    sqlite.bind_text(g.insert,
+                     sqlite.bind_parameter_index(g.insert, "@command"),
+                     unmeta(he->node.nam), -1, SQLITE_STATIC);
+    sqlite.bind_int64(g.insert,
+                      sqlite.bind_parameter_index(g.insert, "@started_at"),
+                      he->stim);
+    sqlite.bind_int64(g.insert,
+                      sqlite.bind_parameter_index(g.insert, "@finished_at"),
+                      he->ftim);
 
-    if (sqlite3_step(g.insert) != SQLITE_DONE) {
-        ERROR("could not insert entry: %s", sqlite3_errmsg(g.db));
+    if (sqlite.step(g.insert) != SQLITE_DONE) {
+        ERROR("could not insert entry: %s", sqlite.errmsg(g.db));
         ret = false;
     }
 
-    sqlite3_clear_bindings(g.insert);
-    sqlite3_reset(g.insert);
+    sqlite.clear_bindings(g.insert);
+    sqlite.reset(g.insert);
 
     return ret;
 }
@@ -136,16 +187,16 @@ start_session(long *id)
         goto out;
     }
 
-    if (sqlite3_step(stmt) != SQLITE_ROW) {
-        ERROR("could not get shell session id: %s", sqlite3_errmsg(g.db));
+    if (sqlite.step(stmt) != SQLITE_ROW) {
+        ERROR("could not get shell session id: %s", sqlite.errmsg(g.db));
         ret = false;
         goto out;
     }
 
-    *id = sqlite3_column_int64(stmt, 0);
+    *id = sqlite.column_int64(stmt, 0);
 
 out:
-    sqlite3_finalize(stmt);
+    sqlite.finalize(stmt);
     return ret;
 }
 
@@ -205,9 +256,9 @@ sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
 
     g.verbose = OPT_ISSET(ops, 'v');
 
-    int ret = sqlite3_open(args[0], &g.db);
+    int ret = sqlite.open(args[0], &g.db);
     if (ret != SQLITE_OK) {
-        ERROR("could not open db: %s", sqlite3_errstr(ret));
+        ERROR("could not open db: %s", sqlite.errstr(ret));
         goto err;
     }
     INFO("opened db at %s", args[0]);
@@ -238,10 +289,10 @@ sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
     return 0;
 
 err:
-    sqlite3_finalize(g.insert);
+    sqlite.finalize(g.insert);
     g.insert = NULL;
 
-    sqlite3_close(g.db);
+    sqlite.close(g.db);
     g.db = NULL;
 
     g.session_id = LONG_MIN;
@@ -259,12 +310,12 @@ sqlite_history_close(char *nam, char **args, Options ops, UNUSED(int func))
         return 1;
     }
 
-    sqlite3_finalize(g.insert);
+    sqlite.finalize(g.insert);
     g.insert = NULL;
 
-    int ret = sqlite3_close(g.db);
+    int ret = sqlite.close(g.db);
     if (ret != SQLITE_OK) {
-        ERROR("close db: %s", sqlite3_errstr(ret));
+        ERROR("close db: %s", sqlite.errstr(ret));
     }
     g.db = NULL;
 
@@ -320,24 +371,24 @@ sqlite_history_list(char *nam, char **args, Options ops, UNUSED(int func))
         const char *cmd;
         size_t len;
 
-        switch (sqlite3_step(stmt)) {
+        switch (sqlite.step(stmt)) {
         case SQLITE_ROW:
-            cmd = (const char *) sqlite3_column_text(stmt, 0);
-            len = sqlite3_column_bytes(stmt, 0);
+            cmd = (const char *)sqlite.column_text(stmt, 0);
+            len = sqlite.column_bytes(stmt, 0);
             fwrite(cmd, 1, len, stdout);
             fwrite(&sep, 1, 1, stdout);
             continue;
         case SQLITE_DONE:
             goto out;
         default:
-            ERROR("could not list history entries: %s", sqlite3_errmsg(g.db));
+            ERROR("could not list history entries: %s", sqlite.errmsg(g.db));
             ret = 1;
             goto out;
         }
     }
 
 out:
-    sqlite3_finalize(stmt);
+    sqlite.finalize(stmt);
     fflush(stdout);
     return ret;
 }
@@ -361,7 +412,33 @@ static struct features module_features = {
 int
 setup_(UNUSED(Module m))
 {
+    sqlite_handle = dlopen("libsqlite3.so", RTLD_NOW | RTLD_LOCAL);
+    if (!sqlite_handle) {
+	ERROR("could not open libsqlite3.so: %s", dlerror());
+	return 1;
+    }
+
+    for (unsigned i = 0; i < countof(sqlite_function_names); i++) {
+	const char *name = sqlite_function_names[i];
+	void **dest = ((void **)&sqlite) + i;
+
+	*dest = dlsym(sqlite_handle, name);
+	if (!*dest) {
+	    ERROR("could not find symbol %s: %s", name, dlerror());
+	    goto err;
+	}
+    }
+
     return 0;
+
+err:
+    if (sqlite_handle) {
+	dlclose(sqlite_handle);
+	sqlite_handle = NULL;
+    }
+    memset(&sqlite, '\0', sizeof(sqlite));
+
+    return 1;
 }
 
 /**/
@@ -397,17 +474,24 @@ cleanup_(Module m)
 int
 finish_(UNUSED(Module m))
 {
-    sqlite3_finalize(g.insert);
+    sqlite.finalize(g.insert);
     g.insert = NULL;
 
-    int ret = sqlite3_close(g.db);
+    int ret = sqlite.close(g.db);
     if (ret != SQLITE_OK) {
-        ERROR("close db: %s", sqlite3_errstr(ret));
+        ERROR("close db: %s", sqlite.errstr(ret));
     }
     g.db = NULL;
 
     g.session_id = LONG_MIN;
     g.verbose = false;
 
+    if (sqlite_handle) {
+	dlclose(sqlite_handle);
+	sqlite_handle = NULL;
+    }
+    memset(&sqlite, '\0', sizeof(sqlite));
+
     return 0;
 }
+
