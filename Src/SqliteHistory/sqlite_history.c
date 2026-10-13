@@ -13,7 +13,7 @@
 
 #define countof(arr) (sizeof(arr) / sizeof(arr[0]))
 
-#define DB_VERSION 3
+#define DB_VERSION 4
 
 
 #define SQLITE_OK           0   /* Successful result */
@@ -22,6 +22,7 @@
 
 typedef void (*sqlite3_destructor_type)(void*);
 #define SQLITE_STATIC      ((sqlite3_destructor_type)0)
+#define SQLITE_TRANSIENT   ((sqlite3_destructor_type)-1)
 
 typedef struct sqlite3 sqlite3;
 typedef struct sqlite3_stmt sqlite3_stmt;
@@ -66,6 +67,8 @@ static void *sqlite_handle = NULL;
 static struct {
     sqlite3 *db;
     sqlite3_stmt *insert;
+    sqlite3_stmt *insert_cwd;
+    sqlite3_stmt *get_cwd_id;
     long session_id;
     bool verbose;
 } g = {
@@ -142,9 +145,38 @@ set_user_version(int version)
 
 /**/
 static bool
-save_histent(const struct histent *he)
+save_histent(const struct histent *he, const char *cwd)
 {
-    bool ret = true;
+    if (!exec("BEGIN")) {
+	return false;
+    }
+
+    int64_t cwd_id = -1;
+    sqlite.bind_text(g.get_cwd_id,
+		     sqlite.bind_parameter_index(g.get_cwd_id, "@path"),
+		     unmeta(cwd), -1, SQLITE_STATIC);
+    if (sqlite.step(g.get_cwd_id) == SQLITE_ROW) {
+	cwd_id = sqlite.column_int64(g.get_cwd_id, 0);
+    }
+    sqlite.clear_bindings(g.get_cwd_id);
+    sqlite.reset(g.get_cwd_id);
+
+    if (cwd_id < 0) {
+	sqlite.bind_text(g.insert_cwd,
+			 sqlite.bind_parameter_index(g.insert_cwd, "@path"),
+		         unmeta(cwd), -1, SQLITE_STATIC);
+	if (sqlite.step(g.insert_cwd) == SQLITE_ROW) {
+	    cwd_id = sqlite.column_int64(g.insert_cwd, 0);
+	} else {
+	    ERROR("could not insert cwd: %s", cwd, sqlite.errmsg(g.db));
+	}
+	sqlite.clear_bindings(g.insert_cwd);
+	sqlite.reset(g.insert_cwd);
+    }
+
+    if (cwd_id < 0) {
+	goto err;
+    }
 
     sqlite.bind_int64(g.insert,
                       sqlite.bind_parameter_index(g.insert, "@session_id"),
@@ -158,16 +190,27 @@ save_histent(const struct histent *he)
     sqlite.bind_int64(g.insert,
                       sqlite.bind_parameter_index(g.insert, "@finished_at"),
                       he->ftim);
+    sqlite.bind_int64(g.insert,
+                      sqlite.bind_parameter_index(g.insert, "@working_directory_id"),
+                      cwd_id);
 
-    if (sqlite.step(g.insert) != SQLITE_DONE) {
+    int ret = sqlite.step(g.insert);
+    if (ret != SQLITE_DONE) {
         ERROR("could not insert entry: %s", sqlite.errmsg(g.db));
-        ret = false;
     }
-
     sqlite.clear_bindings(g.insert);
     sqlite.reset(g.insert);
+    if (ret != SQLITE_DONE) {
+	goto err;
+    }
 
-    return ret;
+    exec("COMMIT");
+
+    return true;
+
+err:
+    exec("ROLLBACK");
+    return false;
 }
 
 /**/
@@ -229,6 +272,13 @@ migrate(void)
         "CREATE INDEX idx_commands_started_at ON commands ( started_at );\n",
 	/* db version 3 - rename created_at to started_at */
 	"ALTER TABLE sessions RENAME COLUMN created_at TO started_at;\n",
+	/* db version 4 - store working directory for each command */
+	"CREATE TABLE working_directories (\n"
+	"    id   INTEGER PRIMARY KEY,\n"
+	"    path TEXT NOT NULL UNIQUE CHECK ( length(path) > 0 )\n"
+	");\n"
+	"ALTER TABLE commands ADD COLUMN working_directory_id INTEGER DEFAULT NULL "
+	"REFERENCES working_directories ( id ) ON DELETE RESTRICT;\n",
     };
 
     if (version > DB_VERSION) {
@@ -283,11 +333,30 @@ sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
 
 
     static const char insert_source[] =
-        "INSERT INTO commands ( session_id, command, started_at, finished_at )"
-        " VALUES ( @session_id, @command, @started_at, @finished_at );"
+        "INSERT INTO commands ( "
+	"    session_id, command, started_at, finished_at, working_directory_id "
+        ") VALUES ( "
+	"    @session_id, @command, @started_at, @finished_at, @working_directory_id "
+        ");"
     ;
     g.insert = prepare(insert_source);
     if (!g.insert) {
+        goto err;
+    }
+
+    static const char insert_cwd_source[] =
+        "INSERT INTO working_directories ( path ) VALUES ( @path ) RETURNING id;"
+    ;
+    g.insert_cwd = prepare(insert_cwd_source);
+    if (!g.insert_cwd) {
+        goto err;
+    }
+
+    static const char get_cwd_id_source[] =
+        "SELECT id FROM working_directories WHERE path = @path;"
+    ;
+    g.get_cwd_id = prepare(get_cwd_id_source);
+    if (!g.get_cwd_id) {
         goto err;
     }
 
@@ -296,6 +365,10 @@ sqlite_history_open(char *nam, char **args, Options ops, UNUSED(int func))
 err:
     sqlite.finalize(g.insert);
     g.insert = NULL;
+    sqlite.finalize(g.insert_cwd);
+    g.insert_cwd = NULL;
+    sqlite.finalize(g.get_cwd_id);
+    g.get_cwd_id = NULL;
 
     sqlite.close(g.db);
     g.db = NULL;
@@ -334,6 +407,9 @@ sqlite_history_close(char *nam, char **args, Options ops, UNUSED(int func))
 static int
 sqlite_history_save(char *nam, char **args, Options ops, UNUSED(int func))
 {
+    // TODO: find a way to pull this out of zsh internals instead of passing externally
+    const char *cwd = args[0];
+
     struct histent *he = hist_ring->up;
     if (!he) {
         ERROR("no last history entry found");
@@ -346,7 +422,7 @@ sqlite_history_save(char *nam, char **args, Options ops, UNUSED(int func))
     INFO("sqlite-history: last item: stim=%lu ftim=%lu text=%s",
          he->stim, he->ftim, he->node.nam);
 
-    if (!save_histent(he)) {
+    if (!save_histent(he, cwd)) {
         return 1;
     }
 
@@ -359,17 +435,35 @@ sqlite_history_list(char *nam, char **args, Options ops, UNUSED(int func))
 {
     const char sep = OPT_ISSET(ops, 'z') ? '\0' : '\n';
     const char *const order = OPT_ISSET(ops, 'r') ? "DESC" : "ASC";
+    const char *cwd = OPT_ARG_SAFE(ops, 'd');
+
     int ret = 0;
     struct sqlite3_stmt *stmt = NULL;
 
-    char buf[55];
-    snprintf(buf, sizeof(buf),
-             "SELECT command FROM commands ORDER BY started_at %s;", order);
+    char buf[256];
+    if (cwd) {
+	static const char fmt[] =
+	    "SELECT c.command "
+	    "FROM commands AS c "
+	    "JOIN working_directories AS wd ON c.working_directory_id = wd.id "
+	    "WHERE wd.path = @path "
+	    "ORDER BY started_at %s;"
+	;
+	snprintf(buf, sizeof(buf), fmt, order);
+    } else {
+	snprintf(buf, sizeof(buf), "SELECT command FROM commands ORDER BY started_at %s;", order);
+    }
 
     stmt = prepare(buf);
     if (!stmt) {
         ret = 1;
         goto out;
+    }
+
+    if (cwd) {
+	sqlite.bind_text(stmt,
+			 sqlite.bind_parameter_index(stmt, "@path"),
+			 unmeta(cwd), -1, SQLITE_STATIC);
     }
 
     while (true) {
@@ -393,16 +487,18 @@ sqlite_history_list(char *nam, char **args, Options ops, UNUSED(int func))
     }
 
 out:
+    sqlite.clear_bindings(stmt);
     sqlite.finalize(stmt);
     fflush(stdout);
     return ret;
 }
 
 static struct builtin bintab[] = {
+    // name flags cfun minargs maxargs cookie opts defops
     BUILTIN("sqlite-history-open", 0, sqlite_history_open, 1, 1, 0, "v", NULL),
     BUILTIN("sqlite-history-close", 0, sqlite_history_close, 0, 0, 0, "", NULL),
-    BUILTIN("sqlite-history-save", 0, sqlite_history_save, 0, 0, 0, "", NULL),
-    BUILTIN("sqlite-history-list", 0, sqlite_history_list, 0, 0, 0, "zr", NULL),
+    BUILTIN("sqlite-history-save", 0, sqlite_history_save, 1, 1, 0, "", NULL),
+    BUILTIN("sqlite-history-list", 0, sqlite_history_list, 0, 0, 0, "zrd:", NULL),
 };
 
 static struct features module_features = {
@@ -481,6 +577,10 @@ finish_(UNUSED(Module m))
 {
     sqlite.finalize(g.insert);
     g.insert = NULL;
+    sqlite.finalize(g.insert_cwd);
+    g.insert_cwd = NULL;
+    sqlite.finalize(g.get_cwd_id);
+    g.get_cwd_id = NULL;
 
     int ret = sqlite.close(g.db);
     if (ret != SQLITE_OK) {
