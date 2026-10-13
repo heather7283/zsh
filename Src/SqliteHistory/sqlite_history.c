@@ -50,9 +50,9 @@ typedef struct sqlite3_stmt sqlite3_stmt;
     DO(int, open, const char *filename, sqlite3 **ppDb) \
     DO(int, close, sqlite3 *pDb)
 
-#define DEFINE_FUNCTION_NAMES(ret, name, ...) "sqlite3_"#name,
+#define DEFINE_FUNCTION_NAME(ret, name, ...) "sqlite3_"#name,
 static const char *const sqlite_function_names[] = {
-    FOR_LIST_OF_FUNCTIONS(DEFINE_FUNCTION_NAMES)
+    FOR_LIST_OF_FUNCTIONS(DEFINE_FUNCTION_NAME)
 };
 
 #define DEFINE_FUNCTION_STRUCT_ELEMENT(ret, name, ...) ret (*name)(__VA_ARGS__);
