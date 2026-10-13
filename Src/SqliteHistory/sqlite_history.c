@@ -237,9 +237,14 @@ migrate(void)
         return false;
     } else while (version < DB_VERSION) {
         INFO("sqlite-history: migration %d -> %d", version, version + 1);
-        if (!exec(migrations[version]) || !set_user_version(++version)) {
-            return false;
-        }
+	const bool success = exec("BEGIN")
+	                  && exec(migrations[version])
+	                  && set_user_version(++version)
+			  && exec("COMMIT");
+	if (!success) {
+	    exec("ROLLBACK");
+	    return false;
+	}
     }
 
     return true;
